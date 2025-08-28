@@ -1,5 +1,5 @@
 import { BrowserRouter as Router, Routes, Route, Link, useNavigate } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import './App.css';
 import PrintPage from "./PrintPage.js"; 
 import CompletedTasks from "./CompletedTasks.js";
@@ -174,6 +174,20 @@ function MainScreen() {
     if (hours) return `${hours}h`;
     return `${minutes}m`;
   }
+  const sortedTasks = useMemo(() => {
+    const toTime = (yyyyMmDd, hhmm) => {
+      try {
+        const [y, m, d] = (yyyyMmDd || '').split('-').map(Number);
+        const [hh, mm] = (hhmm || '').split(':').map(Number);
+        const dt = new Date(y || 0, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0, 0);
+        const t = dt.getTime();
+        return Number.isNaN(t) ? Infinity : t;
+      } catch {
+        return Infinity;
+      }
+    };
+    return [...tasks].sort((a, b) => toTime(a.date, a.startTime) - toTime(b.date, b.startTime));
+  }, [tasks]);
 
   useEffect(() => {
     try {
@@ -211,7 +225,7 @@ function MainScreen() {
               <div className="empty-state">All tasks completed!</div>
             ) : (
               <ul className="task-list">
-                {tasks.map((task) => (
+                {sortedTasks.map((task) => (
                   <li
                     key={task.id || task.event}
                     className={`task-item ${task.completed ? 'completed' : ''} ${fadingIds.has(task.id) ? 'fading' : ''} ${deleteMode ? 'delete-hint' : ''} ${markedForDelete.has(task.id) ? 'marked-delete' : ''}`}
