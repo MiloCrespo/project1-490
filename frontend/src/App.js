@@ -1,8 +1,11 @@
 import { BrowserRouter as Router, Routes, Route, Link, useNavigate } from "react-router-dom";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import './App.css';
 import PrintPage from "./PrintPage.js"; 
 import CompletedTasks from "./CompletedTasks.js";
+// Import the new utilities (you'll need to create these files)
+import { parseIcsFile } from './utils/icsParser.js';
+import { generateWeeklyReport, formatDuration, getWeekStart } from './utils/weeklyReport.js';
 
 /**
  * MainScreen
@@ -24,6 +27,9 @@ function MainScreen() {
     endTime: ""
   });
   const [errors, setErrors] = useState({});
+  
+  // New states for ICS import
+  const fileInputRef = useRef(null);
 
   const generateId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const parseLocalDate = (yyyyMmDd) => {
@@ -41,6 +47,83 @@ function MainScreen() {
     const [y, m, d] = yyyyMmDd.split('-').map(Number);
     const [hh, mm] = (hhmm || '').split(':').map(Number);
     return new Date(y, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0, 0);
+  };
+
+  /**
+   * Handles ICS file import
+   */
+  const handleIcsImport = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+
+  const handleFileChange = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    console.log("Selected file:", file.name, "Type:", file.type, "Size:", file.size);
+
+    // Check file extension
+    const fileName = file.name.toLowerCase();
+    if (!fileName.endsWith('.ics') && !fileName.endsWith('.ical')) {
+      alert('Please select a valid ICS file (*.ics or *.ical)');
+      return;
+    }
+
+    try {
+      // Show loading message
+      const loadingMessage = `Processing ${file.name}...`;
+      console.log(loadingMessage);
+      
+      // Read file content
+      const fileContent = await file.text();
+      console.log("File content length:", fileContent.length);
+      console.log("File starts with:", fileContent.substring(0, 100));
+      
+      // Validate it's an ICS file by checking for basic structure
+      if (!fileContent.includes('BEGIN:VCALENDAR') && !fileContent.includes('BEGIN:VEVENT')) {
+        throw new Error('This does not appear to be a valid ICS file. Missing calendar or event markers.');
+      }
+      
+      // Parse the ICS file
+      const importedEvents = parseIcsFile(fileContent);
+      
+      if (importedEvents.length > 0) {
+        // Add imported events to existing tasks
+        setTasks(prevTasks => {
+          const newTasks = [...prevTasks, ...importedEvents];
+          console.log("Total tasks after import:", newTasks.length);
+          return newTasks;
+        });
+        
+        alert(`Successfully imported ${importedEvents.length} events from ${file.name}!`);
+        console.log("Imported events:", importedEvents);
+      } else {
+        alert('No valid events found in the ICS file. The file may be empty or contain only non-event data.');
+      }
+    } catch (error) {
+      console.error('Detailed error importing ICS file:', error);
+      console.error('Error stack:', error.stack);
+      
+      // Provide more specific error messages
+      let errorMessage = 'Error reading ICS file: ';
+      if (error.message.includes('parsing failed')) {
+        errorMessage += 'The file format is not recognized. Please ensure it\'s a standard ICS calendar file.';
+      } else if (error.message.includes('Missing calendar')) {
+        errorMessage += 'This file doesn\'t appear to be a valid calendar file.';
+      } else {
+        errorMessage += error.message || 'Unknown error occurred.';
+      }
+      
+      alert(errorMessage);
+    } finally {
+      // Clear the file input so the same file can be selected again if needed
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
   };
 
   /**
@@ -163,7 +246,7 @@ function MainScreen() {
     setEditId(null);
   };
 
-  function formatDuration(startDateStr, start, endDateStr, end) {
+  function formatDurationFromDates(startDateStr, start, endDateStr, end) {
     const startDate = parseLocalDateTime(startDateStr, start);
     const endDate = parseLocalDateTime(endDateStr, end);
     const dateDifference = endDate - startDate;
@@ -174,6 +257,7 @@ function MainScreen() {
     if (hours) return `${hours}h`;
     return `${minutes}m`;
   }
+
   const sortedTasks = useMemo(() => {
     const toTime = (yyyyMmDd, hhmm) => {
       try {
@@ -213,13 +297,12 @@ function MainScreen() {
     } catch (e) {}
   }, [tasks]);
 
-
   //HTML Elements
   return ( 
     <div> 
       <div className="main-layout">
         <section className="tasks-fixed">
-      <h1 className="title">USF Daily Task Manager</h1> 
+          <h1 className="title">USF Daily Task Manager</h1> 
           <div className="task-box">
             {tasks.length === 0 ? (
               <div className="empty-state">All tasks completed!</div>
@@ -263,10 +346,10 @@ function MainScreen() {
                         <div className="task-meta">
                           <span className="task-time">
                             {formatDateDisplay(task.date)} {task.startTime}
-                            {" – "}
+                            {" — "}
                             {formatDateDisplay(task.endDate)} {task.endTime}
                           </span>
-                          <span className="task-duration"> · {formatDuration(task.date, task.startTime, task.endDate, task.endTime)}</span>
+                          <span className="task-duration"> · {formatDurationFromDates(task.date, task.startTime, task.endDate, task.endTime)}</span>
                         </div>
                       </div>
                       <div className="task-actions">
@@ -276,7 +359,7 @@ function MainScreen() {
                           onClick={() => startEdit(task.id)}
                           disabled={deleteMode}
                         >
-                          ✏ Edit
+                          ✎ Edit
                         </button>
                       </div>
                     </div>
@@ -377,9 +460,12 @@ function MainScreen() {
           </div>
         </section>
 
-        <div className="print-fixed" style={{ display: 'flex', gap: '8px' }}>
+        <div className="print-fixed" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           {!deleteMode ? (
-            <button type="button" className="my-button" onClick={() => setDeleteMode(true)}>Delete Mode</button>
+            <>
+              <button type="button" className="my-button" onClick={() => setDeleteMode(true)}>Delete Mode</button>
+              <button type="button" className="my-button" onClick={handleIcsImport}>Import ICS</button>
+            </>
           ) : (
             <>
               <button
@@ -403,20 +489,54 @@ function MainScreen() {
             </>
           )}
         </div>
-        <WeeklyReport className="print-fixed-right"/>
+        
+        {/* Hidden file input for ICS import */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".ics,.ical"
+          onChange={handleFileChange}
+          style={{ display: 'none' }}
+        />
+        
+        <WeeklyReport className="print-fixed-right" tasks={tasks} />
       </div>
     </div> 
-    );
+  );
 }
 
-function WeeklyReport({ className }) {
+function WeeklyReport({ className, tasks }) {
   const navigate = useNavigate();
+  
+  const handleWeeklyReport = () => {
+    // Get all tasks (active + completed)
+    let allTasks = [...tasks];
+    try {
+      const completedTasks = JSON.parse(localStorage.getItem('completedTasks') || '[]');
+      allTasks = [...allTasks, ...completedTasks];
+    } catch (e) {
+      console.error('Error loading completed tasks:', e);
+    }
+    
+    // Get current week start
+    const weekStart = getWeekStart();
+    const report = generateWeeklyReport(allTasks, weekStart);
+    
+    // Store the report data for the PrintPage to access
+    localStorage.setItem('weeklyReportData', JSON.stringify(report));
+    
+    // Navigate to print page
+    navigate('/printpage');
+  };
+  
   return (
     <button 
-    type="button"
-    className={`submit-button ${className || ''}`}
-    onClick={() => navigate('/printpage')}
-    >Weekly Report</button>
+      type="button"
+      className={`submit-button ${className || ''}`}
+      onClick={handleWeeklyReport}
+    >
+      Weekly Report
+    </button>
   );
 }
 
@@ -424,11 +544,11 @@ export default function App() {
   return (
     <Router>
       <div className="App">
-      <Routes>
-        <Route path="/" element={<MainScreen />} />
-        <Route path="/printpage" element={<PrintPage />} />
-        <Route path="/completed" element={<CompletedTasks />} />
-      </Routes>
+        <Routes>
+          <Route path="/" element={<MainScreen />} />
+          <Route path="/printpage" element={<PrintPage />} />
+          <Route path="/completed" element={<CompletedTasks />} />
+        </Routes>
       </div>
     </Router>
   );
